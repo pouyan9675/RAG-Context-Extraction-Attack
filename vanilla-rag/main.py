@@ -1,14 +1,8 @@
+#!/usr/bin/env python
 import argparse
 import logging
 from ui import ChatbotUI
-from database import VectorDB
-from llm import LLMModule
-from core import (
-    RAGSystem,
-    index_documents,
-    import_index,
-    export_index,
-)
+from core import RAGSystem
 
 
 def setup_logging():
@@ -36,14 +30,14 @@ def main():
     
     parser.add_argument(
         "--model",
-        default="gpt-3.5-turbo",
-        help="LLM model to use (default: gpt-3.5-turbo)"
+        default="meta-llama/Llama-3.2-1B-Instruct",
+        help="LLM model to use (default: meta-llama/Llama-3.2-1B-Instruct)"
     )
     
     parser.add_argument(
         "--embedding-model",
-        default="text-embedding-ada-002",
-        help="Embedding model to use (default: text-embedding-ada-002)"
+        default="dunzhang/stella_en_400M_v5",
+        help="Embedding model to use (default: dunzhang/stella_en_400M_v5)"
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -82,33 +76,12 @@ def main():
         help="Overlap between chunks (default: 200)"
     )
     
-    # Export command
-    export_parser = subparsers.add_parser("export", help="Export vector store index")
-    export_parser.add_argument(
-        "output_path",
-        help="Path to export the index"
-    )
-    
-    # Import command
-    import_parser = subparsers.add_parser("import", help="Import vector store index")
-    import_parser.add_argument(
-        "input_path",
-        help="Path to the index file to import"
-    )
-    
     args = parser.parse_args()
     
-    
-    # Initialize components
-    vector_store = VectorDB(
-        embedding_model=args.embedding_model
+    rag_system = RAGSystem(
+        args.embedding_model,
+        args.model,
     )
-    
-    llm = LLMModule(
-        model=args.model
-    )
-    
-    rag_system = RAGSystem(vector_store, llm)
     ui = ChatbotUI(rag_system)
     
     # Execute command
@@ -116,17 +89,13 @@ def main():
         run_chatbot(rag_system, ui)
     
     elif args.command == "index":
-        index_documents(
-            vector_store,
+        rag_system.index_documents(
             args.input_path,
-            recursive=args.recursive
+            recursive=args.recursive, 
+            chunk_size=args.chunk_size,
+            chunk_overlap=args.chunk_overlap,
         )
-    
-    elif args.command == "export":
-        export_index(vector_store, args.output_path)
-    
-    elif args.command == "import":
-        import_index(vector_store, args.input_path)
+        rag_system.save_state()
     
     else:
         parser.print_help()

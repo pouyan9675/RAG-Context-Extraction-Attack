@@ -1,7 +1,21 @@
-import numpy as np
-from typing import List, Tuple, Optional, Dict
-from dataclasses import dataclass
+import os
+import pickle
 import heapq
+import logging
+import numpy as np
+from dataclasses import dataclass
+from typing import List, Tuple, Optional, Dict
+
+
+def setup_logging():
+    """Configure logging settings"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+setup_logging()
+
 
 @dataclass
 class VectorRecord:
@@ -10,7 +24,12 @@ class VectorRecord:
     metadata: Optional[Dict] = None
 
 class VectorDB:
-    def __init__(self, dimension: int, index_size: int = 10):
+    def __init__(
+        self, 
+        dimension: int, 
+        index_size: int = 100,
+        db_location: str = "db.pkl",
+    ):
         """
         Initialize the vector database.
         
@@ -20,20 +39,73 @@ class VectorDB:
         """
         self.dimension = dimension
         self.index_size = index_size
+        self.db_location = db_location
         self.vectors: List[VectorRecord] = []
-        self.indexed = False
+        self.ids = set()
+        self._is_indexed = False
         self.centroids = None
         self.centroid_map = {}  # Maps centroid index to vector indices
-        
+        self._load_db()
+
+    def _load_db(self) -> None:
+        """Attempt to load the database from disk."""
+        if os.path.exists(self.db_location):
+            try:
+                with open(self.db_location, 'rb') as f:
+                    saved_state = pickle.load(f)
+                    
+                # Verify the loaded data has the correct dimension
+                if saved_state['dimension'] != self.dimension:
+                    raise ValueError(
+                        f"Loaded database dimension ({saved_state['dimension']}) "
+                        f"doesn't match initialized dimension ({self.dimension})"
+                    )
+                    
+                self.vectors = saved_state['vectors']
+                self.ids = set([x.id for x in self.vectors])
+                self._is_indexed = saved_state['indexed']
+                self.centroids = saved_state['centroids']
+                self.centroid_map = saved_state['centroid_map']
+                logging.info(f"Successfully loaded database from {self.db_location}")
+            except Exception as e:
+                logging.error(f"Error loading database: {str(e)}")
+                # Initialize empty state if load fails
+                self.vectors = []
+                self._is_indexed = False
+                self.centroids = None
+                self.centroid_map = {}
+
+    def store(self) -> None:
+        """Store the current database state to disk."""
+        try:
+            state = {
+                'dimension': self.dimension,
+                'vectors': self.vectors,
+                'indexed': self._is_indexed,
+                'centroids': self.centroids,
+                'centroid_map': self.centroid_map
+            }
+            
+            with open(self.db_location, 'wb') as f:
+                pickle.dump(state, f)
+            logging.info(f"Successfully stored database to {self.db_location}")
+        except Exception as e:
+            logging.error(f"Error storing database: {str(e)}")
+            raise
+
     def add(self, id: str, vector: np.ndarray, metadata: Optional[Dict] = None) -> None:
         """Add a vector to the database."""
+        if id in self.ids:
+            raise ValueError(f"Document id must be unique.")
+
         if len(vector) != self.dimension:
             raise ValueError(f"Vector dimension must be {self.dimension}")
             
         vector = np.array(vector, dtype=np.float32)
         record = VectorRecord(id=id, vector=vector, metadata=metadata)
         self.vectors.append(record)
-        self.indexed = False
+        self.ids.add(id)
+        self._is_indexed = False
         
     def build_index(self) -> None:
         """Build an approximate nearest neighbors index using k-means clustering."""
@@ -54,8 +126,8 @@ class VectorDB:
                 self.centroid_map[label] = []
             self.centroid_map[label].append(i)
             
-        self.indexed = True
-        
+        self._is_indexed = True
+
     def _kmeans(self, vectors: np.ndarray, k: int, max_iters: int = 100) -> Tuple[np.ndarray, np.ndarray]:
         """Simple k-means clustering implementation."""
         # Randomly initialize centroids
@@ -83,7 +155,13 @@ class VectorDB:
         """Calculate cosine similarity between two vectors."""
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
         
-    def search(self, query_vector: np.ndarray, k: int = 5, use_index: bool = True) -> List[Tuple[str, float, Optional[Dict]]]:
+    def search(
+            self, 
+            query_vector: np.ndarray, 
+            k: int = 5,
+            threshold: float = None,
+            use_index: bool = True,
+        ) -> List[Tuple[str, float, Optional[Dict]]]:
         """
         Search for k nearest vectors using cosine similarity.
         Returns list of tuples (id, similarity_score, metadata).
@@ -92,13 +170,15 @@ class VectorDB:
         if len(query_vector) != self.dimension:
             raise ValueError(f"Query vector dimension must be {self.dimension}")
             
-        if not use_index or not self.indexed:
+        if not use_index or not self._is_indexed:
             # Exact search
             similarities = [(
                 record.id,
                 self._cosine_similarity(query_vector, record.vector),
                 record.metadata
             ) for record in self.vectors]
+            if threshold:
+                similarities = [s for s in similarities if s[1] > threshold]
             return heapq.nlargest(k, similarities, key=lambda x: x[1])
             
         # Approximate search using index

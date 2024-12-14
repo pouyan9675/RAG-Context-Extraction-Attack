@@ -1,12 +1,12 @@
 import gradio as gr
-from core import RAGSystem
+
 
 class ChatbotUI:
     """
         Designs a simple gradio User Interface in order to use Chatbot with 
         Retrieval Augmented Generation
     """
-    def __init__(self, rag_system: RAGSystem):
+    def __init__(self, rag_system):
         self.rag_system = rag_system
         
     def add_documents(self, text: str) -> str:
